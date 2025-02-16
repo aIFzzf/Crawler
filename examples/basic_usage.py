@@ -1,15 +1,15 @@
 """
-Basic usage example of quant_crawler.
+Basic usage example of crawler.
 
-This example demonstrates how to use the basic features of quant_crawler
+This example demonstrates how to use the basic features of crawler
 to crawl a website and extract data, images and videos.
 """
 
 import os
 import asyncio
-from quant_crawler.crawler_core import Spider, RequestManager, RateLimiter
-from quant_crawler.data_processor import ContentExtractor, DataStorage, VideoExtractor
-from quant_crawler.monitor import PerformanceMonitor
+from crawler.crawler_core import Spider, RequestManager, RateLimiter
+from crawler.data_processor import ContentExtractor, DataStorage, VideoExtractor
+from crawler.monitor import PerformanceMonitor
 
 async def crawl_images(spider, content_extractor, url, save_dir):
     """Crawl and save images from the given URL."""

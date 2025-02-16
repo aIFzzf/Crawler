@@ -1,5 +1,7 @@
 """Pytest configuration file."""
 import pytest
+from crawler.crawler_core import RequestManager, Spider
+from crawler.data_processor import ContentExtractor
 import aiohttp
 import asyncio
 import platform

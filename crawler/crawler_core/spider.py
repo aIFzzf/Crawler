@@ -3,6 +3,7 @@ Spider module for web crawling.
 """
 import re
 from typing import Dict, Any, Optional, List, Callable
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from datetime import datetime
 from ..interfaces import ISpider
@@ -15,12 +16,13 @@ class Spider(ISpider):
         """Initialize spider with request manager."""
         self.request_manager = request_manager
     
-    async def crawl(self, url: str) -> Dict[str, Any]:
+    async def crawl(self, url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
         Crawl a webpage.
         
         Args:
             url: Target URL to crawl
+            headers: Optional request headers
             
         Returns:
             Dictionary containing page content and metadata
@@ -33,7 +35,7 @@ class Spider(ISpider):
             raise ValueError(f"Invalid URL: {url}")
             
         try:
-            html = await self.request_manager.make_request(url)
+            html = await self.request_manager.make_request(url, headers=headers)
             timestamp = datetime.now().isoformat()
             
             return {
@@ -106,17 +108,17 @@ class Spider(ISpider):
                 
         return results
     
-    async def parse(self, content: str) -> Dict[str, Any]:
+    async def parse(self, html: str) -> Dict[str, Any]:
         """
         Parse HTML content and extract structured data.
         
         Args:
-            content: Raw HTML content to parse
+            html: HTML content to parse
             
         Returns:
             Dictionary containing parsed data
         """
-        soup = BeautifulSoup(content, 'html.parser')
+        soup = BeautifulSoup(html, 'html.parser')
         
         # Extract basic page information
         title = soup.title.string if soup.title else ""
@@ -128,21 +130,23 @@ class Spider(ISpider):
             content = meta.get('content', '')
             if name and content:
                 meta_tags[name] = content
-        
+                
         # Extract links
         links = []
         for link in soup.find_all('a', href=True):
+            href = link['href']
+            text = link.get_text(strip=True)
             links.append({
-                'text': link.get_text(strip=True),
-                'href': link['href']
+                'url': href,
+                'text': text
             })
-        
+            
         return {
             'title': title,
             'meta_tags': meta_tags,
-            'links': links
+            'links': links[:100]  # Limit to first 100 links
         }
-    
+
     def validate_url(self, url: str) -> bool:
         """
         Validate URL format.

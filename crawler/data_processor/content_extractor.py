@@ -186,8 +186,7 @@ class ContentExtractor(IContentExtractor):
         base_url: str,
         save_dir: str = "videos",
         download: bool = False,
-        video_types: List[str] = None,
-        max_size_mb: int = 500
+        video_types: List[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Extract video URLs and optionally download them.
@@ -197,8 +196,7 @@ class ContentExtractor(IContentExtractor):
             base_url: Base URL for resolving relative paths
             save_dir: Directory to save downloaded videos
             download: Whether to download the videos
-            video_types: List of video file extensions to extract (default: ['.mp4', '.webm', '.avi'])
-            max_size_mb: Maximum video size in MB to download (default: 500MB)
+            video_types: List of video file extensions to extract (default: ['.mp4', '.webm', '.ogg'])
             
         Returns:
             List of dictionaries containing video information:
@@ -207,216 +205,69 @@ class ContentExtractor(IContentExtractor):
                 'type': str,          # Video type/extension
                 'source': str,        # Source element type (video, iframe, etc)
                 'title': str,         # Video title if available
-                'thumbnail': str,     # Thumbnail URL if available
-                'local_path': str,    # Local path if downloaded
-                'size': int,          # Size in bytes if available
-                'duration': float,    # Duration in seconds if available
                 'metadata': dict      # Additional metadata
             }
         """
         if video_types is None:
-            video_types = ['.mp4', '.webm', '.avi']
+            video_types = ['.mp4', '.webm', '.ogg']
             
         soup = BeautifulSoup(html, 'html.parser')
         videos = []
         
-        # Create save directory if downloading
-        if download and not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-            
         # Extract from video tags
         for video in soup.find_all('video'):
-            for source in video.find_all('source'):
-                video_info = await self._process_video_element(
-                    source.get('src', ''),
-                    base_url,
-                    save_dir if download else None,
-                    video_types,
-                    max_size_mb,
-                    {
-                        'title': video.get('title', ''),
-                        'poster': video.get('poster', ''),
-                        'type': source.get('type', '')
+            # Check for src attribute first
+            src = video.get('src')
+            if src:
+                abs_url = urljoin(base_url, src)
+                video_info = {
+                    'url': abs_url,
+                    'type': os.path.splitext(src)[1].lower(),
+                    'source': 'video',
+                    'title': video.get('title', ''),
+                    'metadata': {
+                        'width': video.get('width', ''),
+                        'height': video.get('height', ''),
+                        'controls': video.has_attr('controls')
                     }
-                )
-                if video_info:
+                }
+                videos.append(video_info)
+                continue
+                
+            # Check for source tags
+            for source in video.find_all('source'):
+                src = source.get('src')
+                if src:
+                    abs_url = urljoin(base_url, src)
+                    video_info = {
+                        'url': abs_url,
+                        'type': os.path.splitext(src)[1].lower(),
+                        'source': 'video',
+                        'title': video.get('title', ''),
+                        'metadata': {
+                            'width': video.get('width', ''),
+                            'height': video.get('height', ''),
+                            'controls': video.has_attr('controls'),
+                            'type': source.get('type', '')
+                        }
+                    }
                     videos.append(video_info)
                     
-        # Extract from iframes (YouTube, Vimeo, etc)
-        for iframe in soup.find_all('iframe'):
-            video_info = await self._process_video_iframe(
-                iframe.get('src', ''),
-                base_url,
-                save_dir if download else None,
-                {
-                    'title': iframe.get('title', ''),
-                    'width': iframe.get('width', ''),
-                    'height': iframe.get('height', '')
-                }
-            )
-            if video_info:
-                videos.append(video_info)
-                
-        # Extract direct video links from anchor tags
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            if any(href.lower().endswith(ext) for ext in video_types):
-                video_info = await self._process_video_element(
-                    href,
-                    base_url,
-                    save_dir if download else None,
-                    video_types,
-                    max_size_mb,
-                    {'title': link.get_text().strip()}
-                )
-                if video_info:
-                    videos.append(video_info)
+        if download and videos:
+            os.makedirs(save_dir, exist_ok=True)
+            for video in videos:
+                filename = os.path.join(save_dir, os.path.basename(video['url']))
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(video['url']) as response:
+                            if response.status == 200:
+                                with open(filename, 'wb') as f:
+                                    f.write(await response.read())
+                                video['local_path'] = filename
+                except Exception as e:
+                    logger.error(f"Failed to download video {video['url']}: {str(e)}")
                     
         return videos
-        
-    async def _process_video_element(
-        self,
-        url: str,
-        base_url: str,
-        save_dir: str,
-        video_types: List[str],
-        max_size_mb: int,
-        metadata: Dict[str, str]
-    ) -> Optional[Dict[str, Any]]:
-        """Process a video element and optionally download it."""
-        if not url:
-            return None
-            
-        # Resolve relative URL
-        url = urljoin(base_url, url)
-        
-        # Check if URL points to a video file
-        if not any(url.lower().endswith(ext) for ext in video_types):
-            return None
-            
-        video_info = {
-            'url': url,
-            'type': os.path.splitext(url)[1].lower(),
-            'source': 'video',
-            'title': metadata.get('title', ''),
-            'thumbnail': metadata.get('poster', ''),
-            'local_path': '',
-            'size': 0,
-            'duration': 0.0,
-            'metadata': metadata
-        }
-        
-        if save_dir:
-            try:
-                # Get video size before downloading
-                async with aiohttp.ClientSession() as session:
-                    async with session.head(url) as response:
-                        size = int(response.headers.get('content-length', 0))
-                        video_info['size'] = size
-                        
-                        if size > max_size_mb * 1024 * 1024:
-                            logger.warning(f"Video size ({size/1024/1024:.1f}MB) exceeds limit ({max_size_mb}MB)")
-                            return video_info
-                        
-                # Download video
-                filename = self._get_safe_filename(metadata.get('title', '') or os.path.basename(url))
-                local_path = os.path.join(save_dir, filename)
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url) as response:
-                        with open(local_path, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                f.write(chunk)
-                                
-                video_info['local_path'] = local_path
-                    
-            except Exception as e:
-                logger.error(f"Error downloading video {url}: {e}")
-                
-        return video_info
-        
-    async def _process_video_iframe(
-        self,
-        url: str,
-        base_url: str,
-        save_dir: str,
-        metadata: Dict[str, str]
-    ) -> Optional[Dict[str, Any]]:
-        """Process a video iframe (e.g., YouTube, Vimeo)."""
-        if not url:
-            return None
-            
-        # Resolve relative URL
-        url = urljoin(base_url, url)
-        
-        # Extract video platform and ID
-        platform_info = self._get_video_platform_info(url)
-        if not platform_info:
-            return None
-            
-        video_info = {
-            'url': url,
-            'type': platform_info['platform'],
-            'source': 'iframe',
-            'title': metadata.get('title', ''),
-            'thumbnail': platform_info.get('thumbnail', ''),
-            'local_path': '',
-            'size': 0,
-            'duration': 0.0,
-            'metadata': {
-                **metadata,
-                'video_id': platform_info['id'],
-                'embed_url': platform_info['embed_url']
-            }
-        }
-        
-        return video_info
-        
-    def _get_video_platform_info(self, url: str) -> Optional[Dict[str, str]]:
-        """Get video platform information from URL."""
-        # YouTube
-        youtube_patterns = [
-            r'(?:youtube\.com/(?:[^/]+/.+/|(?:v|e(?:mbed)?)/|.*[?&]v=)|youtu\.be/)([^"&?/ ]{11})',
-        ]
-        for pattern in youtube_patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                return {
-                    'platform': 'youtube',
-                    'id': video_id,
-                    'embed_url': f'https://www.youtube.com/embed/{video_id}',
-                    'thumbnail': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
-                }
-                
-        # Vimeo
-        vimeo_patterns = [
-            r'vimeo\.com/(?:video/)?(\d+)',
-            r'player\.vimeo\.com/video/(\d+)'
-        ]
-        for pattern in vimeo_patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                return {
-                    'platform': 'vimeo',
-                    'id': video_id,
-                    'embed_url': f'https://player.vimeo.com/video/{video_id}',
-                    'thumbnail': ''  # Vimeo requires API access for thumbnails
-                }
-                
-        return None
-        
-    def _get_safe_filename(self, filename: str) -> str:
-        """Convert string to safe filename."""
-        # Remove invalid characters
-        filename = re.sub(r'[<>:"/\\|?*]', '', filename)
-        # Remove leading/trailing spaces and dots
-        filename = filename.strip('. ')
-        # Ensure filename is not empty
-        if not filename:
-            filename = 'video'
-        return filename
 
     async def __aenter__(self):
         """Async context manager entry."""
